@@ -6,7 +6,8 @@ use argon2::{
 use rand::Rng;
 use rand::distr::Alphanumeric;
 use rand::seq::IteratorRandom;
-use std::env;
+use std::io::BufRead;
+use std::{env, sync::mpsc::channel};
 
 fn main() {
     // get all the command line arguments. The 0th element is the app name, 1st will be the
@@ -53,6 +54,22 @@ fn main() {
         let hash = &arg[3];
 
         verify(hash, password);
+    } else if command == "brute" {
+        // the second argument is the hash to crack
+        let hash = &arg[2];
+
+        // how long the passwords are that we're trying
+        let len = arg[3].parse::<u32>().unwrap();
+
+        bruteforce(hash, len);
+    } else if command == "wordlist" {
+        // the second argument is the hash to crack
+        let file = &arg[2];
+
+        // how long the passwords are that we're trying
+        let hash = &arg[3];
+
+        wordlist(file, hash);
     } else {
         println!("Invalid command");
     }
@@ -136,4 +153,85 @@ fn verify(password_hash: &str, password: &str) {
         true => println!("Password is correct!"),
         false => println!("Password is incorrect!"),
     }
+}
+
+// This function bruteforces a given hash by trying all possible combinations of characters
+pub fn bruteforce(hash: &str, length: u32) {
+    // define all the characters
+    let char_set: Vec<char> = ['a'..='z', 'A'..='Z', '0'..='9']
+        .into_iter()
+        .flatten()
+        .collect();
+
+    // get the length, we'll need it in a bit
+    let char_len = char_set.len();
+
+    // do this for each word length up to and including the one given
+    for width in 0..length {
+        // then for each word length, loop over all possible combinations
+        for n in 0..(char_len.pow(width + 1)) {
+            // get the nth password given the length and character list
+            let pass = nth_password(&char_set, width + 1, n);
+            println!("Trying password: {pass}");
+            // hash it
+            let pass_hash = format!("{:x}", md5::compute(&pass));
+
+            // compare with the given hash, and if that's it, print the result!
+            if pass_hash == hash {
+                println!("Found password: {pass}");
+                return;
+            }
+        }
+    }
+}
+
+// This function generates the nth password of a given width using the provided character set.
+fn nth_password(char_set: &[char], width: u32, n: usize) -> String {
+    (0..width)
+        .rev() // Process positions from right to left (most to least significant)
+        .map(|i| {
+            // For each position, calculate which character to use
+            // First divide n by char_set.len()^i to get the "digit" at this position
+            let div = n / char_set.len().pow(i);
+            // Then take modulo to get the index in our character set
+            let rem = div % char_set.len();
+
+            // Select the character at the calculated position
+            char_set[rem]
+        })
+        .collect() // Combine all characters into the final string
+}
+
+pub fn wordlist(file: &str, hash: &str) {
+    // open the file
+    let file = std::fs::File::open(file).unwrap();
+    // create a buffered reader
+    let mut reader = std::io::BufReader::new(file);
+    // buffer to hold each line's bytes
+    let mut buffer = Vec::new();
+
+    // manually read lines as bytes
+    while reader.read_until(b'\n', &mut buffer).unwrap() > 0 {
+        // Remove trailing newline if present
+        if buffer.ends_with(b"\n") {
+            buffer.pop();
+        }
+        // Also handle CR+LF if needed
+        if buffer.ends_with(b"\r") {
+            buffer.pop();
+        }
+
+        // Compute hash from the line
+        let pass_hash = format!("{:x}", md5::compute(&buffer));
+        if pass_hash == hash {
+            // convert the bytes to a String
+            let password = String::from_utf8_lossy(&buffer);
+            println!("Found password: {}", password);
+            return;
+        }
+
+        // Clear buffer for next iteration
+        buffer.clear();
+    }
+    println!("Password not found in wordlist");
 }
